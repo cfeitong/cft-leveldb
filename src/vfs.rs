@@ -1,12 +1,24 @@
 //! virtual file system
 
-use crate::error::Result;
 use std::io::SeekFrom;
-use std::path::{Path, PathBuf};
+use std::path::{
+    Path,
+    PathBuf,
+};
 use std::sync::Arc;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+use tokio::fs::{
+    File,
+    OpenOptions,
+};
+use tokio::io::{
+    AsyncReadExt,
+    AsyncSeekExt,
+    AsyncWriteExt,
+};
 use tokio::sync::Mutex;
+
+use crate::error::Result;
 
 /// virtual file system object, which encapsulate all states
 pub struct VFS {

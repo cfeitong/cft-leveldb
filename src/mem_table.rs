@@ -1,7 +1,8 @@
 //! memory table
 
-use bytes::Bytes;
 use std::collections::BTreeMap;
+
+use bytes::Bytes;
 use tokio::sync::Mutex;
 
 /// an ordered table in memory
@@ -27,7 +28,13 @@ impl MemTable {
         self.inner.lock().await.insert(key, value)
     }
 
+    /// check if key is in memtable
     pub async fn contains(&self, key: &Bytes) -> bool {
         self.inner.lock().await.contains_key(key)
+    }
+
+    /// remove corresponding value
+    pub async fn remove(&self, key: &Bytes) -> Option<Bytes> {
+        self.inner.lock().await.remove(key)
     }
 }

@@ -1,0 +1,11 @@
+reorder_imports = true
+binop_separator = "back"
+enum_discrim_align_threshold = 30
+struct_field_align_threshold = 30
+imports_layout = "Vertical"
+inline_attribute_width = 50
+match_arm_leading_pipes = "Preserve"
+imports_granularity = "Module"
+reorder_impl_items = true
+group_imports = "StdExternalCrate"
+use_field_init_shorthand = true
