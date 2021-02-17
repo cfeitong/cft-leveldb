@@ -1,28 +1,40 @@
 //! virtual file system
 
-use std::io::SeekFrom;
-use std::path::{
-    Path,
-    PathBuf,
+use std::{
+    io::SeekFrom,
+    path::{
+        Path,
+        PathBuf,
+    },
+    sync::Arc,
 };
-use std::sync::Arc;
 
-use tokio::fs::{
-    File,
-    OpenOptions,
+use tokio::{
+    fs::{
+        File,
+        OpenOptions,
+    },
+    io::{
+        AsyncReadExt,
+        AsyncSeekExt,
+        AsyncWriteExt,
+    },
+    sync::Mutex,
 };
-use tokio::io::{
-    AsyncReadExt,
-    AsyncSeekExt,
-    AsyncWriteExt,
-};
-use tokio::sync::Mutex;
 
-use crate::error::Result;
+use crate::{
+    error::Result,
+    wal::WalFile,
+};
 
 /// virtual file system object, which encapsulate all states
+#[derive(Clone)]
 pub struct VFS {
     inner: Arc<VFSInner>,
+}
+
+struct VFSInner {
+    base: PathBuf,
 }
 
 impl VFS {
@@ -36,11 +48,21 @@ impl VFS {
     /// open sstable file by level
     pub async fn open_sstable(&self, level: usize) -> Result<VFile> {
         let path = self.base().join(level.to_string());
-        let reader = OpenOptions::new().read(true).open(&path).await?;
-        let writer = OpenOptions::new().append(true).open(&path).await?;
+        let inner = VFileInner::open(&path).await?;
         Ok(VFile {
-            inner: Mutex::new(VFileInner { reader, writer }),
+            inner: Mutex::new(inner),
         })
+    }
+
+    /// open write ahead log file
+    pub async fn open_wal(&self) -> Result<WalFile> {
+        let path = self.base().join("wal.log");
+        let inner = VFileInner::open(&path).await?;
+        let vfile = VFile {
+            inner: Mutex::new(inner),
+        };
+        let wal = WalFile::from_vfile(vfile).await?;
+        Ok(wal)
     }
 
     fn base(&self) -> PathBuf {
@@ -48,24 +70,25 @@ impl VFS {
     }
 }
 
-struct VFSInner {
-    base: PathBuf,
-}
-
 /// virtual file representation
 pub struct VFile {
     inner: Mutex<VFileInner>,
 }
 
+struct VFileInner {
+    writer: File,
+    reader: File,
+}
+
 impl VFile {
     /// Append data to [`VFile`] and return appended size.
-    pub async fn append(&mut self, data: &[u8]) -> Result<()> {
+    pub async fn append(&self, data: &[u8]) -> Result<()> {
         self.inner.lock().await.append(data).await?;
         Ok(())
     }
 
     /// Read a block of `len` size starting from `offset`.
-    pub async fn read_at(&mut self, offset: u64, len: usize) -> Result<Vec<u8>> {
+    pub async fn read_at(&self, offset: u64, len: usize) -> Result<Vec<u8>> {
         self.inner.lock().await.read_at(offset, len).await
     }
 
@@ -74,14 +97,21 @@ impl VFile {
         self.inner.lock().await.sync().await?;
         Ok(())
     }
-}
 
-struct VFileInner {
-    writer: File,
-    reader: File,
+    /// file length in bytes
+    pub async fn len(&self) -> Result<usize> {
+        self.inner.lock().await.len().await
+    }
 }
 
 impl VFileInner {
+    async fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let reader = OpenOptions::new().read(true).open(path).await?;
+        let writer = OpenOptions::new().write(true).open(path).await?;
+        Ok(VFileInner { reader, writer })
+    }
+
     async fn append(&mut self, data: &[u8]) -> Result<()> {
         self.writer.write_all(data).await?;
         Ok(())
@@ -97,5 +127,9 @@ impl VFileInner {
     async fn sync(&self) -> Result<()> {
         self.writer.sync_all().await?;
         Ok(())
+    }
+
+    async fn len(&self) -> Result<usize> {
+        Ok(self.reader.metadata().await?.len() as usize)
     }
 }

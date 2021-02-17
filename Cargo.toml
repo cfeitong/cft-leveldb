@@ -14,3 +14,5 @@ async-trait = "0.1"
 bytes = "1"
 thiserror = "1"
 mimalloc = { version = "0.1", default-features = false }
+memmap2 = "0.2"
+crc = "1"

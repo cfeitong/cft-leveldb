@@ -4,9 +4,11 @@ use std::path::Path;
 
 use bytes::Bytes;
 
-use crate::error::Result;
-use crate::mem_table::MemTable;
-use crate::vfs::VFS;
+use crate::{
+    error::Result,
+    mem_table::MemTable,
+    vfs::VFS,
+};
 
 /// db interface object
 pub struct Db {

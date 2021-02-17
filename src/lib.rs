@@ -1,5 +1,6 @@
 mod mem_table;
 mod vfs;
+mod wal;
 
 pub mod db;
 pub mod error;
