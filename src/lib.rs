@@ -1,3 +1,4 @@
+mod encoding;
 mod mem_table;
 mod vfs;
 mod wal;

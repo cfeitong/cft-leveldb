@@ -108,7 +108,11 @@ impl VFileInner {
     async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let reader = OpenOptions::new().read(true).open(path).await?;
-        let writer = OpenOptions::new().write(true).open(path).await?;
+        let writer = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await?;
         Ok(VFileInner { reader, writer })
     }
 
