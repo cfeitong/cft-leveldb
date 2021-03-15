@@ -3,16 +3,27 @@
 use std::path::Path;
 
 use bytes::Bytes;
+use thiserror::Error;
 
 use crate::{
-    error::Result,
     mem_table::MemTable,
-    vfs::VFS,
+    vfs::{
+        Vfs,
+        VfsError,
+    },
 };
+
+#[derive(Debug, Error)]
+pub enum DbError {
+    #[error(transparent)]
+    VfsError(#[from] VfsError),
+}
+
+type Result<T> = std::result::Result<T, DbError>;
 
 /// db interface object
 pub struct Db {
-    vfs: VFS,
+    vfs: Vfs,
     mem: MemTable,
 }
 
@@ -20,7 +31,7 @@ impl Db {
     /// create a new db
     pub async fn create(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Db {
-            vfs: VFS::new(path.as_ref().to_owned()),
+            vfs: Vfs::new(path.as_ref().to_owned()),
             mem: MemTable::new(),
         })
     }

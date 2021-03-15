@@ -9,6 +9,7 @@ use std::{
     sync::Arc,
 };
 
+use thiserror::Error;
 use tokio::{
     fs::{
         File,
@@ -22,27 +23,36 @@ use tokio::{
     sync::Mutex,
 };
 
-use crate::{
-    error::Result,
-    wal::WalFile,
-};
+#[derive(Debug, Error)]
+pub enum VfsError {
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+}
+
+type Result<T> = std::result::Result<T, VfsError>;
 
 /// virtual file system object, which encapsulate all states
 #[derive(Clone)]
-pub struct VFS {
-    inner: Arc<VFSInner>,
+pub struct Vfs {
+    inner: Arc<VfsInner>,
 }
 
-struct VFSInner {
+struct VfsInner {
     base: PathBuf,
 }
 
-impl VFS {
+impl Vfs {
     /// create new VFS object
     pub fn new(base: PathBuf) -> Self {
-        VFS {
-            inner: Arc::new(VFSInner { base }),
+        Vfs {
+            inner: Arc::new(VfsInner { base }),
         }
+    }
+
+    pub async fn open(&self, path: impl AsRef<Path>) -> Result<VFile> {
+        let path = self.base().join(path);
+        let file = VFile::open(&path).await?;
+        Ok(file)
     }
 
     /// open sstable file by level
@@ -52,17 +62,6 @@ impl VFS {
         Ok(VFile {
             inner: Mutex::new(inner),
         })
-    }
-
-    /// open write ahead log file
-    pub async fn open_wal(&self) -> Result<WalFile> {
-        let path = self.base().join("wal.log");
-        let inner = VFileInner::open(&path).await?;
-        let vfile = VFile {
-            inner: Mutex::new(inner),
-        };
-        let wal = WalFile::from_vfile(vfile).await?;
-        Ok(wal)
     }
 
     fn base(&self) -> PathBuf {
@@ -92,6 +91,11 @@ impl VFile {
         self.inner.lock().await.read_at(offset, len).await
     }
 
+    /// Read underline file
+    pub async fn read_exact(&self, buf: &mut [u8]) -> Result<usize> {
+        Ok(self.inner.lock().await.reader.read_exact(buf).await?)
+    }
+
     /// Synchronize file
     pub async fn sync(&self) -> Result<()> {
         self.inner.lock().await.sync().await?;
@@ -102,11 +106,17 @@ impl VFile {
     pub async fn len(&self) -> Result<usize> {
         self.inner.lock().await.len().await
     }
+
+    async fn open(path: &Path) -> Result<Self> {
+        let inner = VFileInner::open(path).await?;
+        Ok(VFile {
+            inner: Mutex::new(inner),
+        })
+    }
 }
 
 impl VFileInner {
-    async fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
+    async fn open(path: &Path) -> Result<Self> {
         let reader = OpenOptions::new().read(true).open(path).await?;
         let writer = OpenOptions::new()
             .create(true)

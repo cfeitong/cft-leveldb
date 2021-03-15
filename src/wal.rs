@@ -3,23 +3,42 @@ use bytes::{
     Bytes,
     BytesMut,
 };
+use thiserror::Error;
 
-use crate::{
-    error::Result,
-    vfs::VFile,
+use crate::vfs::{
+    self,
+    VFile,
+    Vfs,
 };
+
+#[derive(Debug, Error)]
+pub enum WalError {
+    #[error(transparent)]
+    VfsError(#[from] vfs::VfsError),
+    #[error("invalid record type")]
+    InvalidRecordTypeError,
+}
+
+type Result<T> = std::result::Result<T, WalError>;
 
 const BLOCK_SIZE: usize = 32768;
 // Header is checksum (4 bytes), length (2 bytes), type (1 byte).
 const HEADER_SIZE: usize = 4 + 2 + 1;
 
-/// represent write ahead log file
-pub struct WalFile {
+/// represent WAL writer
+pub struct WalFileWriter {
     file:         VFile,
     block_offset: usize,
 }
 
-impl WalFile {
+impl WalFileWriter {
+    /// open wal file
+    pub async fn open(vfs: Vfs) -> Result<Self> {
+        let vfile = vfs.open("wal.log").await?;
+        let wal = WalFileWriter::new(vfile).await?;
+        Ok(wal)
+    }
+
     /// write a record
     pub async fn write_record(&mut self, data: Bytes) -> Result<()> {
         let mut rest_data = Some(data.as_ref());
@@ -51,9 +70,9 @@ impl WalFile {
         Ok(())
     }
 
-    pub async fn from_vfile(vfile: VFile) -> Result<Self> {
+    pub async fn new(vfile: VFile) -> Result<Self> {
         let block_offset = vfile.len().await? % BLOCK_SIZE;
-        Ok(WalFile {
+        Ok(WalFileWriter {
             file: vfile,
             block_offset,
         })
@@ -76,9 +95,65 @@ impl WalFile {
     }
 }
 
+/// represent WAL reader
+pub struct WalFileReader {
+    file: VFile,
+}
+
+impl WalFileReader {
+    pub async fn new(file: VFile) -> Result<Self> {
+        Ok(WalFileReader { file })
+    }
+
+    async fn read_record(&mut self) -> Result<Record> {
+        let mut buf = vec![0u8; 4 + 2 + 1]; // chucksum(u32) + length(u16) + type(u8), little endian
+        self.file.read_exact(&mut buf).await?;
+        let mut crc = [0u8; 4];
+        crc.clone_from_slice(&buf[0..4]);
+        let crc = u32::from_le_bytes(crc);
+
+        let mut len = [0u8; 2];
+        len.clone_from_slice(&buf[4..6]);
+        let len = u16::from_le_bytes(len);
+
+        let ty = buf[6];
+        let mut data = vec![0u8; len as usize];
+        self.file.read_exact(&mut data).await?;
+
+        Ok(Record {
+            crc,
+            len,
+            ty: RecordType::from_u8(ty)?,
+            data: data.into(),
+        })
+    }
+}
+
+impl IntoIterator for WalFileReader {
+    type IntoIter = WalFileIter;
+    type Item = Result<Record>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        WalFileIter { reader: self }
+    }
+}
+
+/// iterator of logs
+pub struct WalFileIter {
+    reader: WalFileReader,
+}
+
+impl Iterator for WalFileIter {
+    type Item = Result<Record>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
-enum RecordType {
+pub enum RecordType {
     Full   = 1,
     First  = 2,
     Middle = 3,
@@ -94,13 +169,24 @@ impl RecordType {
             (false, false) => RecordType::Middle,
         }
     }
+
+    fn from_u8(ty: u8) -> Result<Self> {
+        use RecordType::*;
+        match ty {
+            1 => Ok(Full),
+            2 => Ok(First),
+            3 => Ok(Middle),
+            4 => Ok(Last),
+            _ => Err(WalError::InvalidRecordTypeError),
+        }
+    }
 }
 
-struct Record {
-    crc:  u32,
-    len:  u16,
-    ty:   RecordType,
-    data: Bytes,
+pub struct Record {
+    pub crc:  u32,
+    pub len:  u16,
+    pub ty:   RecordType,
+    pub data: Bytes,
 }
 
 struct Block {}
