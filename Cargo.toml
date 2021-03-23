@@ -16,3 +16,7 @@ thiserror = "1"
 mimalloc = { version = "0.1", default-features = false }
 memmap2 = "0.2"
 crc = "1"
+futures = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

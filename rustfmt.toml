@@ -1,5 +1,5 @@
 reorder_imports = true
-binop_separator = "back"
+binop_separator = "Back"
 enum_discrim_align_threshold = 30
 struct_field_align_threshold = 30
 imports_layout = "Vertical"

@@ -117,12 +117,12 @@ impl VFile {
 
 impl VFileInner {
     async fn open(path: &Path) -> Result<Self> {
-        let reader = OpenOptions::new().read(true).open(path).await?;
         let writer = OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
             .await?;
+        let reader = OpenOptions::new().read(true).open(path).await?;
         Ok(VFileInner { reader, writer })
     }
 
