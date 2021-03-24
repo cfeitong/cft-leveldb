@@ -43,10 +43,11 @@ struct VfsInner {
 
 impl Vfs {
     /// create new VFS object
-    pub fn new(base: PathBuf) -> Self {
-        Vfs {
+    pub async fn new(base: PathBuf) -> Result<Self> {
+        let _ = tokio::fs::create_dir_all(&base).await?;
+        Ok(Vfs {
             inner: Arc::new(VfsInner { base }),
-        }
+        })
     }
 
     pub async fn open(&self, path: impl AsRef<Path>) -> Result<VFile> {

@@ -5,12 +5,16 @@ use bytes::{
 };
 use futures::prelude::*;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use vfs::VfsError;
 
-use crate::vfs::{
-    self,
-    VFile,
-    Vfs,
+use crate::{
+    encoding::BufMutExt,
+    vfs::{
+        self,
+        VFile,
+        Vfs,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -30,6 +34,34 @@ type Result<T> = std::result::Result<T, WalError>;
 const BLOCK_SIZE: usize = 32768;
 // Header is checksum (4 bytes), length (2 bytes), type (1 byte).
 const HEADER_SIZE: usize = 4 + 2 + 1;
+
+pub struct Wal {
+    writer: Mutex<WalFileWriter>,
+}
+
+impl Wal {
+    pub async fn open(vfs: Vfs) -> Result<Self> {
+        Ok(Wal {
+            writer: Mutex::new(WalFileWriter::open(vfs).await?),
+        })
+    }
+
+    pub async fn set(&self, key: impl AsRef<[u8]>, value: impl AsRef<[u8]>) -> Result<()> {
+        let key = key.as_ref();
+        let value = value.as_ref();
+        self.set_impl(key, value).await
+    }
+
+    async fn set_impl(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        let mut data = BytesMut::new();
+        data.put_var_u32_le(key.len() as u32);
+        data.put(key);
+        data.put_var_u32_le(value.len() as u32);
+        data.put(value);
+        self.writer.lock().await.write_data(data.freeze()).await?;
+        Ok(())
+    }
+}
 
 /// represent WAL writer
 pub struct WalFileWriter {
@@ -51,14 +83,11 @@ impl WalFileWriter {
     }
 
     /// write a record
-    pub async fn write_record(&mut self, data: Bytes) -> Result<()> {
+    pub async fn write_data(&mut self, data: Bytes) -> Result<()> {
         let mut rest_data = Some(data.as_ref());
         let mut is_begin = true;
         let mut is_end = false;
         while let Some(data) = rest_data {
-            if data.is_empty() {
-                break;
-            }
             let left_over = BLOCK_SIZE - self.block_offset;
             if left_over < HEADER_SIZE {
                 // move to next block
@@ -80,6 +109,9 @@ impl WalFileWriter {
             is_begin = false;
 
             rest_data = data.get(cur_len..);
+            if data.len() == cur_len {
+                break;
+            }
         }
 
         Ok(())
@@ -282,34 +314,76 @@ mod tests {
         (0..data.len()).all(|i| data[i] == ((i % 256) as u8))
     }
 
-    #[tokio::test]
-    async fn test_wal_record_read_write() {
+    async fn setup_reader_writer() -> Result<(WalFileReader, WalFileWriter)> {
         let dir = tempfile::tempdir().unwrap().into_path();
-        let vfs = Vfs::new(dir);
-        let mut writer = WalFileWriter::open(vfs.clone()).await.unwrap();
-        for _ in 0..10usize {
-            writer.write_record(gen_data(1024)).await.unwrap();
+        let vfs = Vfs::new(dir).await?;
+        let writer = WalFileWriter::open(vfs.clone()).await.unwrap();
+        let reader = WalFileReader::open(vfs).await.unwrap();
+        Ok((reader, writer))
+    }
+
+    async fn write(writer: &mut WalFileWriter, data: &str) -> Result<()> {
+        let data = Bytes::copy_from_slice(data.as_bytes());
+        writer.write_data(data).await?;
+        Ok(())
+    }
+
+    async fn read(reader: &mut WalFileReader) -> Result<String> {
+        let data = reader
+            .read_data()
+            .await?
+            .as_ref()
+            .map(|data| String::from_utf8_lossy(&*data).to_string())
+            .unwrap_or_else(|| "EOF".to_string());
+        Ok(data)
+    }
+
+    #[tokio::test]
+    async fn test_wal_data_read_write() {
+        let (mut reader, mut writer) = setup_reader_writer().await.unwrap();
+        let reader = &mut reader;
+        let writer = &mut writer;
+        write(writer, "foo").await.unwrap();
+        write(writer, "bar").await.unwrap();
+        write(writer, "").await.unwrap();
+        write(writer, "xxxx").await.unwrap();
+        assert_eq!(read(reader).await.unwrap(), "foo");
+        assert_eq!(read(reader).await.unwrap(), "bar");
+        assert_eq!(read(reader).await.unwrap(), "");
+        assert_eq!(read(reader).await.unwrap(), "xxxx");
+        assert_eq!(read(reader).await.unwrap(), "EOF");
+        assert_eq!(read(reader).await.unwrap(), "EOF");
+    }
+
+    #[tokio::test]
+    async fn test_wal_data_many_blocks() {
+        let (mut reader, mut writer) = setup_reader_writer().await.unwrap();
+        for _i in 0..10usize {
+            writer.write_data(gen_data(1024)).await.unwrap();
         }
 
         for _ in 0..10usize {
-            writer.write_record(gen_data(102400)).await.unwrap();
+            writer.write_data(gen_data(102400)).await.unwrap();
         }
 
-        for _ in 0..100usize {
-            writer.write_record(gen_data(60)).await.unwrap();
+        for _i in 0..100usize {
+            writer.write_data(gen_data(60)).await.unwrap();
         }
-        let mut reader = WalFileReader::open(vfs).await.unwrap();
-        for _ in 0..10usize {
-            let record = reader.read_record().await.unwrap().unwrap();
-            assert!(validate_data(&record.data));
+        for _i in 0..10usize {
+            let data = reader.read_data().await.unwrap().unwrap();
+            assert_eq!(data.len(), 1024);
+            assert!(validate_data(&data));
         }
-        for _ in 0..10usize {
-            let record = reader.read_record().await.unwrap().unwrap();
-            assert!(validate_data(&record.data));
+        for _i in 0..10usize {
+            let data = reader.read_data().await.unwrap().unwrap();
+            assert_eq!(data.len(), 102400);
+            assert!(validate_data(&data));
         }
-        for _ in 0..100usize {
-            let record = reader.read_record().await.unwrap().unwrap();
-            assert!(validate_data(&record.data));
+        for _i in 0..100usize {
+            let data = reader.read_data().await.unwrap().unwrap();
+            assert_eq!(data.len(), 60);
+            assert!(validate_data(&data));
         }
+        assert!(reader.read_data().await.unwrap().is_none());
     }
 }

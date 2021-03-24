@@ -19,7 +19,7 @@ impl MemTable {
     }
 
     /// get value from memtable
-    pub async fn get(&self, key: &Bytes) -> Option<Bytes> {
+    pub async fn get(&self, key: &[u8]) -> Option<Bytes> {
         self.inner.lock().await.get(key).cloned()
     }
 
