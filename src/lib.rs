@@ -1,5 +1,6 @@
 mod encoding;
 mod mem_table;
+mod sorted_stable;
 mod vfs;
 mod wal;
 
